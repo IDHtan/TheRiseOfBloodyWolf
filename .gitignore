@@ -1,7 +1,7 @@
-Binaries
-DerivedDataCache
-Intermediate
-Saved
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
 .vscode
 .vs
 *.VC.db
@@ -12,3 +12,7 @@ Saved
 *.suo
 *.xcodeproj
 *.xcworkspace
+Content/Levels/Blockouts
+Content/__ExternalActors__/Levels/Blockouts
+Content/__ExternalObjects__/Levels/Blockouts
+Content/Developer/
