@@ -1,0 +1,79 @@
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+#include "SplatCommon.ush"
+
+Texture2D<float4> PositionTexture;
+Buffer<float4> displaced_positions;
+uint use_displaced;
+Texture2D<float4> SH0Texture;
+Texture2D<float4> Cov2OpacityTexture;
+uint texture_width;
+float brightness;
+
+float4x4 local_to_world;
+Buffer<uint> sorted_indices;
+Buffer<float4> computed_transforms;
+
+// World-to-clip using UE translated world coordinates (LWC support)
+float4 SplatWorldToClip(float3 worldPos)
+{
+    ResolvedView = ResolveView();
+    worldPos += local_to_world[3].xyz + ResolvedView.PreViewTranslationHigh;
+    return mul(float4(worldPos, 1), ResolvedView.TranslatedWorldToClip);
+}
+
+float2 SplatGetResolution()
+{
+    return View.ViewSizeAndInvSize.xy / View.ViewResolutionFraction;
+}
+
+void main(
+    in uint vertexID : SV_VertexID,
+    out float2 out_gaussianUV : GAUSSIAN_UV,
+    out nointerpolation float4 out_color : SPLAT_COLOR,
+    out float4 out_position : SV_Position)
+{
+    uint gaussianIdx = sorted_indices[vertexID / 6];
+
+    // Read position and transform to world space
+    float3 posLocal = use_displaced
+        ? displaced_positions[gaussianIdx].xyz
+        : ReadPosition(PositionTexture, gaussianIdx, texture_width);
+    float3 posWorld = mul(posLocal, (float3x3)local_to_world);
+    float4 posClip = SplatWorldToClip(posWorld);
+
+    // Get 2x2 transform from compute pass
+    float4 splatTransform = computed_transforms[gaussianIdx];
+
+    // Skip invisible splats (transform is zero = culled in compute pass)
+    if (dot(splatTransform, splatTransform) == 0.0 || posClip.w <= 0.0)
+    {
+        out_position = float4(0, 0, 0, 0);
+        out_gaussianUV = float2(0, 0);
+        out_color = float4(0, 0, 0, 0);
+        return;
+    }
+
+    // 6 vertices per splat (2 triangles = 1 quad)
+    float2 quadCorners[6] = {
+        float2(-RADIUS_SIGMA_OVER_SQRT_2, -RADIUS_SIGMA_OVER_SQRT_2),
+        float2( RADIUS_SIGMA_OVER_SQRT_2, -RADIUS_SIGMA_OVER_SQRT_2),
+        float2(-RADIUS_SIGMA_OVER_SQRT_2,  RADIUS_SIGMA_OVER_SQRT_2),
+        float2( RADIUS_SIGMA_OVER_SQRT_2, -RADIUS_SIGMA_OVER_SQRT_2),
+        float2(-RADIUS_SIGMA_OVER_SQRT_2,  RADIUS_SIGMA_OVER_SQRT_2),
+        float2( RADIUS_SIGMA_OVER_SQRT_2,  RADIUS_SIGMA_OVER_SQRT_2)
+    };
+
+    // Apply 2x2 transform to corner offset
+    float2 ndcOffset = mul(float2x2(splatTransform.x, splatTransform.y, splatTransform.z, splatTransform.w), quadCorners[vertexID % 6]);
+    // Pixel to NDC (the x2 for NDC [-1,1] range is already baked into two_focal_length)
+    ndcOffset /= SplatGetResolution();
+
+    out_position = float4(posClip.xy + ndcOffset * posClip.w, posClip.z, posClip.w);
+    out_gaussianUV = quadCorners[vertexID % 6];
+
+    // Color from SH0 + opacity (brightness controls opacity for fade-to-transparent)
+    float3 color = ReadColorSH0(SH0Texture, gaussianIdx, texture_width);
+    float opacity = ReadOpacity(Cov2OpacityTexture, gaussianIdx, texture_width) * brightness;
+    out_color = float4(color, opacity);
+}

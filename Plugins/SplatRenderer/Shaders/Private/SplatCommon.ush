@@ -1,0 +1,107 @@
+// Constants
+#define RADIUS_SIGMA sqrt(8.0)
+#define RADIUS_SIGMA_OVER_SQRT_2 (RADIUS_SIGMA / sqrt(2.0))
+#define CUTOFF_RADIUS_SIGMA_SQUARED_OVER_2 (RADIUS_SIGMA_OVER_SQRT_2 * RADIUS_SIGMA_OVER_SQRT_2)
+
+#define DISTANCE_PRECISION 16
+#define DISTANCE_SCALE ((1 << DISTANCE_PRECISION) - 2)
+#define DISTANCE_NOT_VISIBLE ((1 << DISTANCE_PRECISION) - 1)
+
+// SH0 DC coefficient: 1 / (2 * sqrt(pi))
+#define SH_C0 0.28209479177387814
+
+// Read position from texture (PLY meters → UE centimeters: * 100)
+float3 ReadPosition(Texture2D<float4> tex, uint idx, uint tex_width)
+{
+    uint2 tc = uint2(idx % tex_width, idx / tex_width);
+    float4 t = tex.Load(int3(tc, 0));
+    return t.rgb * 100.0;
+}
+
+// Read rotation quaternion from texture (already in UE space)
+// Returns: (x, y, z, w)
+float4 ReadRotation(Texture2D<float4> tex, uint idx, uint tex_width)
+{
+    uint2 tc = uint2(idx % tex_width, idx / tex_width);
+    float4 t = tex.Load(int3(tc, 0));
+    return t.rgba;
+}
+
+// Read pre-computed covariance row from texture
+// Cov1: (cov00, cov01, cov02, cov11)
+// Cov2: (cov12, cov22, unused, opacity)
+float3x3 ReadCovariance(Texture2D<float4> cov1_tex, Texture2D<float4> cov2_tex, uint idx, uint tex_width)
+{
+    uint2 tc = uint2(idx % tex_width, idx / tex_width);
+    float4 c1 = cov1_tex.Load(int3(tc, 0));
+    float4 c2 = cov2_tex.Load(int3(tc, 0));
+    return float3x3(
+        c1.x, c1.y, c1.z,
+        c1.y, c1.w, c2.x,
+        c1.z, c2.x, c2.y
+    );
+}
+
+// Read scale from texture (PLY meters → UE centimeters: * 100)
+// A channel = sigmoid(opacity)
+float3 ReadScale(Texture2D<float4> tex, uint idx, uint tex_width)
+{
+    uint2 tc = uint2(idx % tex_width, idx / tex_width);
+    float4 t = tex.Load(int3(tc, 0));
+    return t.rgb * 100.0;
+}
+
+// Read opacity from ScaleOpacity texture (already sigmoid-activated)
+float ReadOpacity(Texture2D<float4> tex, uint idx, uint tex_width)
+{
+    uint2 tc = uint2(idx % tex_width, idx / tex_width);
+    return tex.Load(int3(tc, 0)).a;
+}
+
+// sRGB to linear conversion
+// 3DGS training produces colors in sRGB space; UE scene color expects linear
+float3 SRGBToLinear(float3 srgb)
+{
+    // Approximate: pow(x, 2.2)
+    // Exact piecewise would be: x <= 0.04045 ? x/12.92 : pow((x+0.055)/1.055, 2.4)
+    return pow(srgb, 2.2);
+}
+
+// Read color from SH0 texture
+// DC color = SH0 * C0 + 0.5, then convert from sRGB to linear
+float3 ReadColorSH0(Texture2D<float4> tex, uint idx, uint tex_width)
+{
+    uint2 tc = uint2(idx % tex_width, idx / tex_width);
+    float3 sh0 = tex.Load(int3(tc, 0)).rgb;
+    float3 color_srgb = saturate(sh0 * SH_C0 + 0.5);
+    return SRGBToLinear(color_srgb);
+}
+
+// Compute 3x3 covariance matrix from quaternion and scale.
+// Texture stores: q = (qz, qx, -qy, qw), s = (exp(s2), exp(s0), exp(s1)) * 100
+// Must recover COLMAP-space rotation/scale, compute covariance there,
+// then transform to UE via T * CovC * T^T (T includes reflection, det=-1).
+float3x3 ComputeCovariance(float4 q, float3 s)
+{
+    // Recover COLMAP quaternion (x, y, z, w) and scale (s0, s1, s2)
+    float cx = q.y, cy = -q.z, cz = q.x, cw = q.w;
+    float3 cs = float3(s.y, s.z, s.x);
+
+    // Build rotation matrix in COLMAP space
+    float3x3 R = float3x3(
+        1.0 - 2.0*(cy*cy + cz*cz), 2.0*(cx*cy - cw*cz),       2.0*(cx*cz + cw*cy),
+        2.0*(cx*cy + cw*cz),        1.0 - 2.0*(cx*cx + cz*cz), 2.0*(cy*cz - cw*cx),
+        2.0*(cx*cz - cw*cy),        2.0*(cy*cz + cw*cx),        1.0 - 2.0*(cx*cx + cy*cy)
+    );
+
+    // Covariance in COLMAP space: CovC = R * diag(s^2) * R^T
+    float3x3 M = float3x3(R[0] * cs, R[1] * cs, R[2] * cs);
+    float3x3 CovC = mul(M, transpose(M));
+
+    // Transform COLMAP (x,y,z) -> UE (z, x, -y): Cov_UE = T * CovC * T^T
+    return float3x3(
+         CovC[2][2],  CovC[2][0], -CovC[2][1],
+         CovC[0][2],  CovC[0][0], -CovC[0][1],
+        -CovC[1][2], -CovC[1][0],  CovC[1][1]
+    );
+}

@@ -1,0 +1,16 @@
+#include "/Engine/Public/Platform.ush"
+#include "SplatCommon.ush"
+
+void main(
+    in float2 gaussianUV : GAUSSIAN_UV,
+    in nointerpolation float4 splatColor : SPLAT_COLOR,
+    out float4 out_color : SV_Target0)
+{
+    float gaussianFalloff = dot(gaussianUV, gaussianUV);
+
+    float alpha = (gaussianFalloff < CUTOFF_RADIUS_SIGMA_SQUARED_OVER_2)
+        ? splatColor.a * exp(-gaussianFalloff)
+        : 0;
+
+    out_color = float4(splatColor.rgb, alpha);
+}

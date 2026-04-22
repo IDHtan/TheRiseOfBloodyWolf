@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 3,
+	"VersionName": "1.1.2",
+	"FriendlyName": "Splat Renderer",
+	"Description": "3D/4D Gaussian Splatting renderer for Unreal Engine",
+	"Category": "Rendering",
+	"CreatedBy": "Dazai Studio",
+	"CreatedByURL": "https://github.com/DazaiStudio",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "SplatRenderer",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		}
+	]
+}
