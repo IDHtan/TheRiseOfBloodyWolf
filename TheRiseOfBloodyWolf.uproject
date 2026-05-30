@@ -18,6 +18,10 @@
 		{
 			"Name": "SplatRenderer",
 			"Enabled": false
+		},
+		{
+			"Name": "HDRIBackdrop",
+			"Enabled": true
 		}
 	]
 }
